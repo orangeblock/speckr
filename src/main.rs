@@ -1,6 +1,10 @@
 use std::convert::TryInto;
 use std::mem::size_of;
 
+// TODO: compare with built-in rotate_ fns.
+fn ror(x: u16, n: u8) -> u16 { x >> n | x << (16 - n) }
+fn rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
+
 fn hex2str(hex_str: &String) -> String {
     let mut ret: String = String::from("");
     for i in (0..hex_str.len()).step_by(2){
@@ -12,20 +16,20 @@ fn hex2str(hex_str: &String) -> String {
 }
 
 fn speck_round_enc(x: u16, y: u16, k: u16) -> (u16, u16) {
-    let mut x = x.rotate_right(7);
+    let mut x = ror(x, 7);
     x = x.wrapping_add(y);
     x ^= k;
-    let mut y = y.rotate_left(2);
+    let mut y = rol(y, 2);
     y ^= x;
     (x, y)
 }
 
 fn speck_round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
     let mut y = y ^ x;
-    y = y.rotate_right(2);
+    y = ror(y, 2);
     let mut x = x ^ k;
     x = x.wrapping_sub(y);
-    x = x.rotate_left(7);
+    x = rol(x, 7);
     (x, y)
 }
 
