@@ -77,41 +77,43 @@ fn bytes2words(bytes: &[u8]) -> Vec<u16>{
     v
 }
 
-fn main() {
-    let a = 0b10101010u16;
-    let b = 0b10010101u16;
-    // let k = 0b10010101u16;
-    let k: u64 = 0x1918111009080100;
-    
-    let v = bytes2words(&k.to_le_bytes());
-    let keys = expand_key(v.as_slice().try_into().expect("Invalid vector size"));
-    for (i, k) in keys.iter().enumerate(){
-        println!("{:02}: 0x{:04x}", i, k);
+fn encrypt(block: u32, k: u64) -> u32{
+    let key_vec: Vec<u16> = bytes2words(&k.to_le_bytes());
+    let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
+    let round_keys = expand_key(
+        key_vec.as_slice().try_into().expect("Invalid vector size")
+    );
+    let mut bl = block_vec[1];
+    let mut br = block_vec[0];
+    for i in 0..22{
+        let (l, r) = speck_round_enc(bl, br, round_keys[i]);
+        bl = l;
+        br = r;
     }
-    
+    ((bl as u32) << 16) | br as u32
+}
 
-    // let pt = 0x6574694cu32;
-    // println!("a: {:04b}", a);
-    // println!("b: {:04b}", b);
-    // println!("a ^ b: {:04b}", a ^ b);
-    // println!("a & b: {:04b}", a & b);
-    // println!("a | b: {:04b}", a | b);
-    // println!("a(hex): {:x}", a);
-    // println!("b(hex): {:x}", b);
-    // println!("a ^ b to hex: {:x}", a ^ b);
-    // println!("hex(a) ^ hex(b): {:x}", 0xaau32 ^ 0x95u32);
-    // println!("{:?}", hex2str(&format!("{:x}", pt)));
-    // println!("a: {:016b}", a);
-    // println!("b: {:016b}", b);
-    // println!("k: {:016b}", k);
-    // println!("==after encryption");
-    // let (e1, e2) = speck_round_enc(a, b, k);
-    // println!("a: {:016b}", e1);
-    // println!("b: {:016b}", e2);
-    // println!("==after decryption");
-    // let (d1, d2) = speck_round_dec(e1, e2, k);
-    // println!("a: {:016b}", d1);
-    // println!("b: {:016b}", d2);
+fn decrypt(block: u32, k: u64) -> u32{
+    let key_vec: Vec<u16> = bytes2words(&k.to_le_bytes());
+    let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
+    let round_keys = expand_key(
+        key_vec.as_slice().try_into().expect("Invalid vector size")
+    );
+    let mut bl = block_vec[1];
+    let mut br = block_vec[0];
+    for i in (0..22).rev(){
+        let (l, r) = speck_round_dec(bl, br, round_keys[i]);
+        bl = l;
+        br = r;
+    }
+    ((bl as u32) << 16) | br as u32
+}
 
-    // expand_key(arr);
+fn main() {
+    let pt = 0x6574694cu32;
+    let k = 0x1918111009080100u64;
+    let ct = encrypt(pt, k);
+    println!("ct: {:08x}", ct);
+    let pt2 = decrypt(ct, k);
+    println!("pt: {:08x}", pt2);
 }
