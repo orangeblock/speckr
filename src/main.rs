@@ -4,6 +4,55 @@ struct Key{
     round_keys: [u16; 22]
 }
 
+struct Key2<T>{
+    round_keys: Vec<T>
+}
+
+trait KeyOperations<W, B, K> {
+    fn new(key: K) -> Key2<W>;
+    fn encrypt(&self, block: B) -> B;
+    fn decrypt(&self, block: B) -> B;
+}
+
+impl KeyOperations<u16, u32, u64> for Key2<u16> {
+    fn new(key: u64) -> Key2<u16> {
+        let round_num: usize = 22;
+        let (mut l2, mut l1, mut l0, mut k0) = (
+            (key >> 48) as u16, (key >> 32) as u16, (key >> 16) as u16, key as u16);
+        let mut ret = Key2 { round_keys: vec!(k0; round_num) };
+        for i in 0..(round_num-1){
+            let (e1, e0) = speck_round_enc(l0, k0, i as u16);
+            k0 = e0; l0 = l1; l1 = l2; l2 = e1;
+            ret.round_keys[i+1] = k0;
+        }
+        ret
+    }
+
+    fn encrypt(&self, block: u32) -> u32 {
+        let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
+        let mut bl = block_vec[1];
+        let mut br = block_vec[0];
+        for i in 0..22{
+            let (l, r) = speck_round_enc(bl, br, self.round_keys[i]);
+            bl = l;
+            br = r;
+        }
+        ((bl as u32) << 16) | br as u32
+    }
+
+    fn decrypt(&self, block: u32) -> u32 {
+        let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
+        let mut bl = block_vec[1];
+        let mut br = block_vec[0];
+        for i in (0..22).rev(){
+            let (l, r) = speck_round_dec(bl, br, self.round_keys[i]);
+            bl = l;
+            br = r;
+        }
+        ((bl as u32) << 16) | br as u32
+    }
+}
+
 /// Performs key scheduling and stores the round keys in the struct.
 ///
 /// The key is split into an array of words where the 0-th 
@@ -118,7 +167,7 @@ fn encrypt(block: u32, k: u64) -> u32{
     ((bl as u32) << 16) | br as u32
 }
 
-fn encrypt32(block: u32, k: &Key) -> u32 {
+fn encrypt32(block: u32, k: &Key2<u16>) -> u32 {
     let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
     let mut bl = block_vec[1];
     let mut br = block_vec[0];
@@ -147,7 +196,7 @@ fn decrypt(block: u32, k: u64) -> u32{
 }
 
 
-fn decrypt32(block: u32, k: &Key) -> u32{
+fn decrypt32(block: u32, k: &Key2<u16>) -> u32{
     let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
     let mut bl = block_vec[1];
     let mut br = block_vec[0];
@@ -163,10 +212,12 @@ fn decrypt32(block: u32, k: &Key) -> u32{
 fn main() {
     let pt = 0x6574694cu32;
     let k = 0x1918111009080100u64;
-    let key = Key::new(k);
-    let ct = encrypt32(pt, &key);
+    let key = Key2::new(k);
+    // let ct = encrypt32(pt, &key);
+    let ct = key.encrypt(pt);
     println!("ct: {:08x}", ct);
-    let pt2 = decrypt32(ct, &key);
+    // let pt2 = decrypt32(ct, &key);
+    let pt2 = key.decrypt(ct);
     println!("pt: {:08x}", pt2);
     // let f = File::open("test.txt").unwrap();
     // let mut reader = BufReader::new(f);
