@@ -1,99 +1,109 @@
-use std::convert::TryInto;
-
-struct Key{
-    round_keys: [u16; 22]
-}
-
-struct Key2<T>{
+struct Key<T>{
     round_keys: Vec<T>
 }
 
-trait KeyOperations<W, B, K> {
-    fn new(key: K) -> Key2<W>;
+trait SpeckOps<W, B, K> {
+    const ROUNDS: usize;
+
+    /// Performs key scheduling storing the round keys in the struct.
+    ///
+    /// The key is split into an array of words where the 0-th 
+    /// index is the first word in memory (rightmost word below). 
+    /// For illustration purposes the following mental image is assumed:
+    ///
+    /// [ <L_(i+m-2)>   ...    <L_i>   <k_i> ]
+    ///      idx=3     idx=2   idx=1   idx=0
+    ///
+    /// ...which for first round (i=0) and a 4-word key (m=4) becomes:
+    ///
+    /// [ <L_2>  <L_1>  <L_0>  <k_0> ]
+    ///   idx=3  idx=2  idx=1  idx=0
+    ///
+    /// See also [sec. 4.2]: https://eprint.iacr.org/2013/404.pdf
+    fn new(key: K) -> Key<W>;
+
+    /// Performs block encryption by successively applying the round 
+    /// function using the generated round keys.
     fn encrypt(&self, block: B) -> B;
+
+    /// Performs block decryption by reversing the encryption operations.
     fn decrypt(&self, block: B) -> B;
+
+    /// The Speck round function used for encryption as well as key expansion. 
+    fn _round_enc(x: W, y: W, k: W) -> (W, W);
+
+    /// Inverse operations of the round function used for decryption.
+    fn _round_dec(x: W, y: W, k: W) -> (W, W);
+
+    // TODO: compare with built-in rotate_ fns.
+    fn _ror(x: W, n: u8) -> W;
+    fn _rol(x: W, n: u8) -> W;
 }
 
-impl KeyOperations<u16, u32, u64> for Key2<u16> {
-    fn new(key: u64) -> Key2<u16> {
-        let round_num: usize = 22;
+/// Speck 32/64
+impl SpeckOps<u16, u32, u64> for Key<u16> {
+    const ROUNDS: usize = 22;
+
+    fn new(key: u64) -> Key<u16> {
         let (mut l2, mut l1, mut l0, mut k0) = (
-            (key >> 48) as u16, (key >> 32) as u16, (key >> 16) as u16, key as u16);
-        let mut ret = Key2 { round_keys: vec!(k0; round_num) };
-        for i in 0..(round_num-1){
-            let (e1, e0) = speck_round_enc(l0, k0, i as u16);
+            (key >> 48) as u16, (key >> 32) as u16, 
+            (key >> 16) as u16, key as u16
+        );
+        let mut ret = Key { round_keys: vec!(k0; Self::ROUNDS) };
+        for i in 0..(Self::ROUNDS-1){
+            // generate next round of keys
+            let (e1, e0) = Self::_round_enc(l0, k0, i as u16);
+            // update key parts for next round
             k0 = e0; l0 = l1; l1 = l2; l2 = e1;
+            // set current round key
             ret.round_keys[i+1] = k0;
         }
         ret
     }
 
     fn encrypt(&self, block: u32) -> u32 {
-        let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
-        let mut bl = block_vec[1];
-        let mut br = block_vec[0];
-        for i in 0..22{
-            let (l, r) = speck_round_enc(bl, br, self.round_keys[i]);
-            bl = l;
-            br = r;
+        let (mut b1, mut b0) = ((block >> 16) as u16, block as u16);
+        for i in 0..Self::ROUNDS{
+            let (l, r) = Self::_round_enc(
+                b1, b0, self.round_keys[i]
+            );
+            b1 = l; b0 = r;
         }
-        ((bl as u32) << 16) | br as u32
+        ((b1 as u32) << 16) | b0 as u32
     }
 
     fn decrypt(&self, block: u32) -> u32 {
-        let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
-        let mut bl = block_vec[1];
-        let mut br = block_vec[0];
-        for i in (0..22).rev(){
-            let (l, r) = speck_round_dec(bl, br, self.round_keys[i]);
-            bl = l;
-            br = r;
-        }
-        ((bl as u32) << 16) | br as u32
-    }
-}
-
-/// Performs key scheduling and stores the round keys in the struct.
-///
-/// The key is split into an array of words where the 0-th 
-/// index is the first word in memory (rightmost word below). 
-/// For illustration purposes the following mental image is assumed:
-///
-/// [ <L_(i+m-2)>   ...    <L_i>   <k_i> ]
-///      idx=3     idx=2   idx=1   idx=0
-///
-/// ...which for first round (i=0) and a 4-word key (m=4) becomes:
-///
-/// [ <L_2>  <L_1>  <L_0>  <k_0> ]
-///   idx=3  idx=2  idx=1  idx=0
-///
-/// See also [sec. 4.2]: https://eprint.iacr.org/2013/404.pdf
-impl Key {
-    pub fn new(key: u64) -> Key {
-        let mut parts: [u16; 4] = bytes2words(&key.to_le_bytes())
-            .as_slice().try_into().expect("Invalid key size");
-        let mut ret = Key{ round_keys: [parts[0]; 22] };
-        for i in 0..(ret.round_keys.len()-1){
-            // generate next round keys
-            let (l, r) = speck_round_enc(
-                parts[1], parts[0], i as u16
+        let (mut b1, mut b0) = ((block >> 16) as u16, block as u16); 
+        for i in (0..Self::ROUNDS).rev(){
+            let (l, r) = Self::_round_dec(
+                b1, b0, self.round_keys[i]
             );
-            // update key parts for next round
-            parts[0] = r;
-            for j in 1..parts.len()-1{
-                parts[j] = parts[j+1];
-            }
-            parts[parts.len()-1] = l;
-            // set current round key
-            ret.round_keys[i+1] = parts[0];
+            b1 = l; b0 = r;
         }
-        ret
+        ((b1 as u32) << 16) | b0 as u32
     }
-}
+    
+    fn _round_enc(x: u16, y: u16, k: u16) -> (u16, u16) {
+        let mut x = Self::_ror(x, 7);
+        x = x.wrapping_add(y);
+        x ^= k;
+        let mut y = Self::_rol(y, 2);
+        y ^= x;
+        (x, y)
+    }
 
-// TODO: compare with built-in rotate_ fns.
-fn ror(x: u16, n: u8) -> u16 { x >> n | x << (16 - n) }
-fn rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
+    fn _round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
+        let mut y = y ^ x;
+        y = Self::_ror(y, 2);
+        let mut x = x ^ k;
+        x = x.wrapping_sub(y);
+        x = Self::_rol(x, 7);
+        (x, y)
+    }
+
+    fn _ror(x: u16, n: u8) -> u16 { x >> n | x << (16 - n) }
+    fn _rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
+}
 
 fn hex2str(hex_str: &String) -> String {
     let mut ret: String = String::from("");
@@ -105,114 +115,10 @@ fn hex2str(hex_str: &String) -> String {
     return ret;
 }
 
-fn speck_round_enc(x: u16, y: u16, k: u16) -> (u16, u16) {
-    let mut x = ror(x, 7);
-    x = x.wrapping_add(y);
-    x ^= k;
-    let mut y = rol(y, 2);
-    y ^= x;
-    (x, y)
-}
-
-fn speck_round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
-    let mut y = y ^ x;
-    y = ror(y, 2);
-    let mut x = x ^ k;
-    x = x.wrapping_sub(y);
-    x = rol(x, 7);
-    (x, y)
-}
-
-fn expand_key(mut parts: [u16; 4]) -> [u16; 22]{
-    let mut round_keys = [parts[0]; 22];
-    for i in 0..(round_keys.len()-1){
-        // generate next round key
-        let (l, r) = speck_round_enc(
-            parts[1], parts[0], i as u16
-        );
-        // update key parts for next round
-        parts[0] = r;
-        for j in 1..parts.len()-1{
-            parts[j] = parts[j+1];
-        }
-        parts[parts.len()-1] = l;
-        // set current round key
-        round_keys[i+1] = parts[0];
-    }
-    round_keys
-}
-
-fn bytes2words(bytes: &[u8]) -> Vec<u16>{
-    let mut v: Vec<u16> = Vec::new();
-    for i in (0..bytes.len()).step_by(2){
-        // beware, this ties the code to little endian architectures
-        v.push(u16::from_le_bytes([bytes[i], bytes[i+1]]));
-    }
-    v
-}
-
-fn encrypt(block: u32, k: u64) -> u32{
-    let key_vec: Vec<u16> = bytes2words(&k.to_le_bytes());
-    let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
-    let round_keys = expand_key(
-        key_vec.as_slice().try_into().expect("Invalid vector size")
-    );
-    let mut bl = block_vec[1];
-    let mut br = block_vec[0];
-    for i in 0..22{
-        let (l, r) = speck_round_enc(bl, br, round_keys[i]);
-        bl = l;
-        br = r;
-    }
-    ((bl as u32) << 16) | br as u32
-}
-
-fn encrypt32(block: u32, k: &Key2<u16>) -> u32 {
-    let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
-    let mut bl = block_vec[1];
-    let mut br = block_vec[0];
-    for i in 0..22{
-        let (l, r) = speck_round_enc(bl, br, k.round_keys[i]);
-        bl = l;
-        br = r;
-    }
-    ((bl as u32) << 16) | br as u32
-}
-
-fn decrypt(block: u32, k: u64) -> u32{
-    let key_vec: Vec<u16> = bytes2words(&k.to_le_bytes());
-    let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
-    let round_keys = expand_key(
-        key_vec.as_slice().try_into().expect("Invalid vector size")
-    );
-    let mut bl = block_vec[1];
-    let mut br = block_vec[0];
-    for i in (0..22).rev(){
-        let (l, r) = speck_round_dec(bl, br, round_keys[i]);
-        bl = l;
-        br = r;
-    }
-    ((bl as u32) << 16) | br as u32
-}
-
-
-fn decrypt32(block: u32, k: &Key2<u16>) -> u32{
-    let block_vec: Vec<u16> = bytes2words(&block.to_le_bytes());
-    let mut bl = block_vec[1];
-    let mut br = block_vec[0];
-    for i in (0..22).rev(){
-        let (l, r) = speck_round_dec(bl, br, k.round_keys[i]);
-        bl = l;
-        br = r;
-    }
-    ((bl as u32) << 16) | br as u32
-}
-
-
 fn main() {
     let pt = 0x6574694cu32;
     let k = 0x1918111009080100u64;
-    let key = Key2::new(k);
+    let key = Key::new(k);
     // let ct = encrypt32(pt, &key);
     let ct = key.encrypt(pt);
     println!("ct: {:08x}", ct);
