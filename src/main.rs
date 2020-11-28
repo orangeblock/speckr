@@ -51,11 +51,8 @@ impl SpeckOps<u16, u32, u64> for Key<u16> {
         );
         let mut ret = Key { round_keys: vec!(k0; Self::ROUNDS) };
         for i in 0..(Self::ROUNDS-1){
-            // generate next round of keys
             let (e1, e0) = Self::_round_enc(l0, k0, i as u16);
-            // update key parts for next round
             k0 = e0; l0 = l1; l1 = l2; l2 = e1;
-            // set current round key
             ret.round_keys[i+1] = k0;
         }
         ret
@@ -105,6 +102,133 @@ impl SpeckOps<u16, u32, u64> for Key<u16> {
     fn _rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
 }
 
+/// Speck 64/128
+impl SpeckOps<u32, u64, u128> for Key<u32> {
+    const ROUNDS: usize = 27;
+
+    fn new(key: u128) -> Key<u32> {
+        let (mut l2, mut l1, mut l0, mut k0) = (
+            (key >> 96) as u32, (key >> 64) as u32, 
+            (key >> 32) as u32, key as u32
+        );
+        let mut ret = Key { round_keys: vec!(k0; Self::ROUNDS) };
+        for i in 0..(Self::ROUNDS-1){
+            let (e1, e0) = Self::_round_enc(l0, k0, i as u32);
+            k0 = e0; l0 = l1; l1 = l2; l2 = e1;
+            ret.round_keys[i+1] = k0;
+        }
+        ret
+    }
+
+    fn encrypt(&self, block: u64) -> u64 {
+        let (mut b1, mut b0) = ((block >> 32) as u32, block as u32);
+        for i in 0..Self::ROUNDS{
+            let (l, r) = Self::_round_enc(
+                b1, b0, self.round_keys[i]
+            );
+            b1 = l; b0 = r;
+        }
+        ((b1 as u64) << 32) | b0 as u64
+    }
+
+    fn decrypt(&self, block: u64) -> u64 {
+        let (mut b1, mut b0) = ((block >> 32) as u32, block as u32); 
+        for i in (0..Self::ROUNDS).rev(){
+            let (l, r) = Self::_round_dec(
+                b1, b0, self.round_keys[i]
+            );
+            b1 = l; b0 = r;
+        }
+        ((b1 as u64) << 32) | b0 as u64
+    }
+
+    // TODO: _round_enc and _round_dec are identical for anything
+    // above Speck 32/64 (excluding non-native sizes) so might be
+    // able to consolidate.
+    fn _round_enc(x: u32, y: u32, k: u32) -> (u32, u32) {
+        let mut x = Self::_ror(x, 8);
+        x = x.wrapping_add(y);
+        x ^= k;
+        let mut y = Self::_rol(y, 3);
+        y ^= x;
+        (x, y)
+    }
+
+    fn _round_dec(x: u32, y: u32, k: u32) -> (u32, u32) {
+        let mut y = y ^ x;
+        y = Self::_ror(y, 3);
+        let mut x = x ^ k;
+        x = x.wrapping_sub(y);
+        x = Self::_rol(x, 8);
+        (x, y)
+    }
+
+    fn _ror(x: u32, n: u8) -> u32 { x >> n | x << (32 - n) }
+    fn _rol(x: u32, n: u8) -> u32 { x << n | x >> (32 - n) }
+}
+
+/// Speck 128/128
+impl SpeckOps<u64, u128, u128> for Key<u64> {
+    const ROUNDS: usize = 32;
+
+    fn new(key: u128) -> Key<u64> {
+        let (mut l0, mut k0) = ((key >> 64) as u64, key as u64);
+        let mut ret = Key { round_keys: vec!(k0; Self::ROUNDS) };
+        for i in 0..(Self::ROUNDS-1){
+            // generate next round of keys
+            let (e1, e0) = Self::_round_enc(l0, k0, i as u64);
+            // update key parts for next round
+            k0 = e0; l0 = e1;
+            // set current round key
+            ret.round_keys[i+1] = k0;
+        }
+        ret
+    }
+
+    fn encrypt(&self, block: u128) -> u128 {
+        let (mut b1, mut b0) = ((block >> 64) as u64, block as u64);
+        for i in 0..Self::ROUNDS{
+            let (l, r) = Self::_round_enc(
+                b1, b0, self.round_keys[i]
+            );
+            b1 = l; b0 = r;
+        }
+        ((b1 as u128) << 64) | b0 as u128
+    }
+
+    fn decrypt(&self, block: u128) -> u128 {
+        let (mut b1, mut b0) = ((block >> 64) as u64, block as u64); 
+        for i in (0..Self::ROUNDS).rev(){
+            let (l, r) = Self::_round_dec(
+                b1, b0, self.round_keys[i]
+            );
+            b1 = l; b0 = r;
+        }
+        ((b1 as u128) << 64) | b0 as u128
+    }
+
+    fn _round_enc(x: u64, y: u64, k: u64) -> (u64, u64) {
+        let mut x = Self::_ror(x, 8);
+        x = x.wrapping_add(y);
+        x ^= k;
+        let mut y = Self::_rol(y, 3);
+        y ^= x;
+        (x, y)
+    }
+
+    fn _round_dec(x: u64, y: u64, k: u64) -> (u64, u64) {
+        let mut y = y ^ x;
+        y = Self::_ror(y, 3);
+        let mut x = x ^ k;
+        x = x.wrapping_sub(y);
+        x = Self::_rol(x, 8);
+        (x, y)
+    }
+
+    fn _ror(x: u64, n: u8) -> u64 { x >> n | x << (64 - n) }
+    fn _rol(x: u64, n: u8) -> u64 { x << n | x >> (64 - n) }
+}
+
 fn hex2str(hex_str: &String) -> String {
     let mut ret: String = String::from("");
     for i in (0..hex_str.len()).step_by(2){
@@ -119,14 +243,24 @@ fn main() {
     let pt = 0x6574694cu32;
     let k = 0x1918111009080100u64;
     let key = Key::new(k);
-    // let ct = encrypt32(pt, &key);
     let ct = key.encrypt(pt);
-    println!("ct: {:08x}", ct);
-    // let pt2 = decrypt32(ct, &key);
+    assert_eq!(ct, 0xa86842f2);
     let pt2 = key.decrypt(ct);
-    println!("pt: {:08x}", pt2);
-    // let f = File::open("test.txt").unwrap();
-    // let mut reader = BufReader::new(f);
-    // let mut buf = vec![0u8; 1024];
-    // reader.read_exact(&mut buf).unwrap();
+    assert_eq!(pt, pt2);
+
+    let pt = 0x3b7265747475432du64;
+    let k = 0x1b1a1918131211100b0a090803020100u128;
+    let key = Key::new(k);
+    let ct = key.encrypt(pt);
+    assert_eq!(ct, 0x8c6fa548454e028b);
+    let pt2 = key.decrypt(ct);
+    assert_eq!(pt, pt2);
+
+    let pt = 0x6c617669757165207469206564616d20u128;
+    let k = 0x0f0e0d0c0b0a09080706050403020100u128;
+    let key = Key::new(k);
+    let ct = key.encrypt(pt);
+    assert_eq!(ct, 0xa65d9851797832657860fedf5c570d18u128);
+    let pt2 = key.decrypt(ct);
+    assert_eq!(pt2, pt);
 }
