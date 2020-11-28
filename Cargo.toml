@@ -11,3 +11,4 @@ criterion = "0.3.3"
 rand = "0.7.3"
 
 [dependencies]
+num = "0.3.1"

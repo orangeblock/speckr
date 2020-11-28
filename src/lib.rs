@@ -1,9 +1,20 @@
+use num::PrimInt;
+
 struct Key<T>{
     round_keys: Vec<T>
 }
 
-trait SpeckOps<W, B, K> {
+trait SpeckOps<W, B, K> 
+where 
+    W: PrimInt + num::traits::WrappingAdd + num::traits::WrappingSub, 
+    B: PrimInt, K: PrimInt,
+{
     const ROUNDS: usize;
+    const WORD_SIZE: usize;
+    const BLOCK_SIZE: usize;
+    const KEY_SIZE: usize;
+    const ROUND_ALPHA: usize;
+    const ROUND_BETA: usize;
 
     /// Performs key scheduling storing the round keys in the struct.
     ///
@@ -30,19 +41,40 @@ trait SpeckOps<W, B, K> {
     fn decrypt(&self, block: B) -> B;
 
     /// The Speck round function used for encryption as well as key expansion. 
-    fn _round_enc(x: W, y: W, k: W) -> (W, W);
+    fn _round_enc(x: W, y: W, k: W) -> (W, W) {
+        let mut x = Self::_ror(x, Self::ROUND_ALPHA);
+        x = x.wrapping_add(&y);
+        x = x ^ k;
+        let mut y = Self::_rol(y, Self::ROUND_BETA);
+        y = y ^ x;
+        (x, y)
+    }
 
     /// Inverse operations of the round function used for decryption.
-    fn _round_dec(x: W, y: W, k: W) -> (W, W);
+    fn _round_dec(x: W, y: W, k: W) -> (W, W) {
+        let mut y = y ^ x;
+        y = Self::_ror(y, Self::ROUND_BETA);
+        let mut x = x ^ k;
+        x = x.wrapping_sub(&y);
+        x = Self::_rol(x, Self::ROUND_ALPHA);
+        (x, y)
+    }
 
     // TODO: compare with built-in rotate_ fns.
-    fn _ror(x: W, n: u8) -> W;
-    fn _rol(x: W, n: u8) -> W;
+    // #[inline]
+    fn _ror(x: W, n: usize) -> W { x >> n | x << (Self::WORD_SIZE - n) }
+    // #[inline]
+    fn _rol(x: W, n: usize) -> W { x << n | x >> (Self::WORD_SIZE - n) }
 }
 
 /// Speck 32/64
 impl SpeckOps<u16, u32, u64> for Key<u16> {
     const ROUNDS: usize = 22;
+    const WORD_SIZE: usize = 16;
+    const BLOCK_SIZE: usize = 32;
+    const KEY_SIZE: usize = 64;
+    const ROUND_ALPHA: usize = 7;
+    const ROUND_BETA: usize = 2;
 
     fn new(key: u64) -> Key<u16> {
         let (mut l2, mut l1, mut l0, mut k0) = (
@@ -80,33 +112,38 @@ impl SpeckOps<u16, u32, u64> for Key<u16> {
         ((b1 as u32) << 16) | b0 as u32
     }
     
-    fn _round_enc(x: u16, y: u16, k: u16) -> (u16, u16) {
-        let mut x = Self::_ror(x, 7);
-        x = x.wrapping_add(y);
-        x ^= k;
-        let mut y = Self::_rol(y, 2);
-        y ^= x;
-        (x, y)
-    }
+    // fn _round_enc(x: u16, y: u16, k: u16) -> (u16, u16) {
+    //     let mut x = Self::_ror(x, Self::ROUND_ALPHA);
+    //     x = x.wrapping_add(y);
+    //     x ^= k;
+    //     let mut y = Self::_rol(y, Self::ROUND_BETA);
+    //     y ^= x;
+    //     (x, y)
+    // }
 
-    fn _round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
-        let mut y = y ^ x;
-        y = Self::_ror(y, 2);
-        let mut x = x ^ k;
-        x = x.wrapping_sub(y);
-        x = Self::_rol(x, 7);
-        (x, y)
-    }
+    // fn _round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
+    //     let mut y = y ^ x;
+    //     y = Self::_ror(y, 2);
+    //     let mut x = x ^ k;
+    //     x = x.wrapping_sub(y);
+    //     x = Self::_rol(x, 7);
+    //     (x, y)
+    // }
 
-    // #[inline]
-    fn _ror(x: u16, n: u8) -> u16 { x >> n | x << (16 - n) }
-    // #[inline]
-    fn _rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
+    // // #[inline]
+    // fn _ror(x: u16, n: u8) -> u16 { x >> n | x << (16 - n) }
+    // // #[inline]
+    // fn _rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
 }
 
 /// Speck 64/128
 impl SpeckOps<u32, u64, u128> for Key<u32> {
     const ROUNDS: usize = 27;
+    const WORD_SIZE: usize = 32;
+    const BLOCK_SIZE: usize = 64;
+    const KEY_SIZE: usize = 128;
+    const ROUND_ALPHA: usize = 8;
+    const ROUND_BETA: usize = 3;
 
     fn new(key: u128) -> Key<u32> {
         let (mut l2, mut l1, mut l0, mut k0) = (
@@ -147,31 +184,36 @@ impl SpeckOps<u32, u64, u128> for Key<u32> {
     // TODO: _round_enc and _round_dec are identical for anything
     // above Speck 32/64 (excluding non-native sizes) so might be
     // able to consolidate.
-    fn _round_enc(x: u32, y: u32, k: u32) -> (u32, u32) {
-        let mut x = Self::_ror(x, 8);
-        x = x.wrapping_add(y);
-        x ^= k;
-        let mut y = Self::_rol(y, 3);
-        y ^= x;
-        (x, y)
-    }
+    // fn _round_enc(x: u32, y: u32, k: u32) -> (u32, u32) {
+    //     let mut x = Self::_ror(x, 8);
+    //     x = x.wrapping_add(y);
+    //     x ^= k;
+    //     let mut y = Self::_rol(y, 3);
+    //     y ^= x;
+    //     (x, y)
+    // }
 
-    fn _round_dec(x: u32, y: u32, k: u32) -> (u32, u32) {
-        let mut y = y ^ x;
-        y = Self::_ror(y, 3);
-        let mut x = x ^ k;
-        x = x.wrapping_sub(y);
-        x = Self::_rol(x, 8);
-        (x, y)
-    }
+    // fn _round_dec(x: u32, y: u32, k: u32) -> (u32, u32) {
+    //     let mut y = y ^ x;
+    //     y = Self::_ror(y, 3);
+    //     let mut x = x ^ k;
+    //     x = x.wrapping_sub(y);
+    //     x = Self::_rol(x, 8);
+    //     (x, y)
+    // }
 
-    fn _ror(x: u32, n: u8) -> u32 { x >> n | x << (32 - n) }
-    fn _rol(x: u32, n: u8) -> u32 { x << n | x >> (32 - n) }
+    // fn _ror(x: u32, n: u8) -> u32 { x >> n | x << (32 - n) }
+    // fn _rol(x: u32, n: u8) -> u32 { x << n | x >> (32 - n) }
 }
 
 /// Speck 128/128
 impl SpeckOps<u64, u128, u128> for Key<u64> {
     const ROUNDS: usize = 32;
+    const WORD_SIZE: usize = 64;
+    const BLOCK_SIZE: usize = 128;
+    const KEY_SIZE: usize = 128;
+    const ROUND_ALPHA: usize = 8;
+    const ROUND_BETA: usize = 3;
 
     fn new(key: u128) -> Key<u64> {
         let (mut l0, mut k0) = ((key >> 64) as u64, key as u64);
@@ -209,26 +251,26 @@ impl SpeckOps<u64, u128, u128> for Key<u64> {
         ((b1 as u128) << 64) | b0 as u128
     }
 
-    fn _round_enc(x: u64, y: u64, k: u64) -> (u64, u64) {
-        let mut x = Self::_ror(x, 8);
-        x = x.wrapping_add(y);
-        x ^= k;
-        let mut y = Self::_rol(y, 3);
-        y ^= x;
-        (x, y)
-    }
+    // fn _round_enc(x: u64, y: u64, k: u64) -> (u64, u64) {
+    //     let mut x = Self::_ror(x, 8);
+    //     x = x.wrapping_add(y);
+    //     x ^= k;
+    //     let mut y = Self::_rol(y, 3);
+    //     y ^= x;
+    //     (x, y)
+    // }
 
-    fn _round_dec(x: u64, y: u64, k: u64) -> (u64, u64) {
-        let mut y = y ^ x;
-        y = Self::_ror(y, 3);
-        let mut x = x ^ k;
-        x = x.wrapping_sub(y);
-        x = Self::_rol(x, 8);
-        (x, y)
-    }
+    // fn _round_dec(x: u64, y: u64, k: u64) -> (u64, u64) {
+    //     let mut y = y ^ x;
+    //     y = Self::_ror(y, 3);
+    //     let mut x = x ^ k;
+    //     x = x.wrapping_sub(y);
+    //     x = Self::_rol(x, 8);
+    //     (x, y)
+    // }
 
-    fn _ror(x: u64, n: u8) -> u64 { x >> n | x << (64 - n) }
-    fn _rol(x: u64, n: u8) -> u64 { x << n | x >> (64 - n) }
+    // fn _ror(x: u64, n: u8) -> u64 { x >> n | x << (64 - n) }
+    // fn _rol(x: u64, n: u8) -> u64 { x << n | x >> (64 - n) }
 }
 
 
