@@ -98,7 +98,9 @@ impl SpeckOps<u16, u32, u64> for Key<u16> {
         (x, y)
     }
 
+    // #[inline]
     fn _ror(x: u16, n: u8) -> u16 { x >> n | x << (16 - n) }
+    // #[inline]
     fn _rol(x: u16, n: u8) -> u16 { x << n | x >> (16 - n) }
 }
 
@@ -229,38 +231,66 @@ impl SpeckOps<u64, u128, u128> for Key<u64> {
     fn _rol(x: u64, n: u8) -> u64 { x << n | x >> (64 - n) }
 }
 
-fn hex2str(hex_str: &String) -> String {
-    let mut ret: String = String::from("");
-    for i in (0..hex_str.len()).step_by(2){
-        // decode next pair of hex chars
-        let c: char = u8::from_str_radix(&hex_str[i..i+2], 16).unwrap() as char;
-        ret.push(c);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::prelude::random;
+    
+    #[test]
+    fn test_correct_32_64(){
+        let pt = 0x6574694cu32;
+        let k = Key::new(0x1918111009080100u64);
+        let ct = k.encrypt(pt);
+        assert_eq!(ct, 0xa86842f2);
+        let pt2 = k.decrypt(ct);
+        assert_eq!(pt2, pt);
     }
-    return ret;
-}
 
-fn main() {
-    let pt = 0x6574694cu32;
-    let k = 0x1918111009080100u64;
-    let key = Key::new(k);
-    let ct = key.encrypt(pt);
-    assert_eq!(ct, 0xa86842f2);
-    let pt2 = key.decrypt(ct);
-    assert_eq!(pt, pt2);
+    #[test]
+    fn test_random_32_64(){
+        let k = Key::new(random::<u64>());
+        for _ in 0..50{
+            let pt = random::<u32>();
+            assert_eq!(pt, k.decrypt(k.encrypt(pt)));
+        }
+    }
 
-    let pt = 0x3b7265747475432du64;
-    let k = 0x1b1a1918131211100b0a090803020100u128;
-    let key = Key::new(k);
-    let ct = key.encrypt(pt);
-    assert_eq!(ct, 0x8c6fa548454e028b);
-    let pt2 = key.decrypt(ct);
-    assert_eq!(pt, pt2);
+    #[test]
+    fn test_correct_64_128(){
+        let pt = 0x3b7265747475432du64;
+        let k = Key::new(0x1b1a1918131211100b0a090803020100u128);
+        let ct = k.encrypt(pt);
+        assert_eq!(ct, 0x8c6fa548454e028b);
+        let pt2 = k.decrypt(ct);
+        assert_eq!(pt2, pt);
+    }
 
-    let pt = 0x6c617669757165207469206564616d20u128;
-    let k = 0x0f0e0d0c0b0a09080706050403020100u128;
-    let key = Key::new(k);
-    let ct = key.encrypt(pt);
-    assert_eq!(ct, 0xa65d9851797832657860fedf5c570d18u128);
-    let pt2 = key.decrypt(ct);
-    assert_eq!(pt2, pt);
+    #[test]
+    fn test_random_64_128(){
+        let k = Key::new(rand::random::<u128>());
+        for _ in 0..50{
+            let pt = rand::random::<u64>();
+            assert_eq!(pt, k.decrypt(k.encrypt(pt)));
+        }
+    }
+
+    #[test]
+    fn test_correct_128_128(){
+        let pt = 0x6c617669757165207469206564616d20u128;
+        let k = Key::new(0x0f0e0d0c0b0a09080706050403020100u128);
+        let ct = k.encrypt(pt);
+        assert_eq!(ct, 0xa65d9851797832657860fedf5c570d18);
+        let pt2 = k.decrypt(ct);
+        assert_eq!(pt2, pt);
+    }
+
+    #[test]
+    fn test_random_128_128(){
+        let k = Key::new(rand::random::<u128>());
+        for _ in 0..50{
+            let pt = rand::random::<u128>();
+            assert_eq!(pt, k.decrypt(k.encrypt(pt)));
+        }
+    }
 }
