@@ -1,11 +1,11 @@
 use num::PrimInt;
 use num::traits::{WrappingAdd, WrappingSub, AsPrimitive};
 
-struct Key<W> {
+pub struct Key<W> {
     round_keys: Vec<W>
 }
 
-trait SpeckOps<W, B, K> 
+pub trait SpeckOps<W, B, K> 
 where 
     W: PrimInt + WrappingAdd + WrappingSub + AsPrimitive<B>, 
     B: PrimInt + AsPrimitive<W>, 
@@ -80,16 +80,18 @@ where
     fn round_dec(x: W, y: W, k: W) -> (W, W) {
         let mut y = y ^ x;
         y = Self::_ror(y, Self::ROUND_BETA);
+        y.rotate_right(3);
         let mut x = x ^ k;
         x = x.wrapping_sub(&y);
         x = Self::_rol(x, Self::ROUND_ALPHA);
         (x, y)
     }
 
-    // TODO: compare with built-in rotate_ fns.
-    // #[inline]
+    // Custom bit rotations which are *not* correct for the general case
+    // but should be slightly faster than rotate_left/rotate_right here.
+    #[inline]
     fn _ror(x: W, n: usize) -> W { x >> n | x << (Self::WORD_SIZE - n) }
-    // #[inline]
+    #[inline]
     fn _rol(x: W, n: usize) -> W { x << n | x >> (Self::WORD_SIZE - n) }
 }
 
@@ -193,7 +195,7 @@ impl SpeckOps<u64, u128, u128> for Key<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::prelude::random;
+    use rand::random;
     
     #[test]
     fn test_correct_32_64(){

@@ -12,3 +12,7 @@ rand = "0.7.3"
 
 [dependencies]
 num = "0.3.1"
+
+[[bench]]
+name = "core"
+harness = false
