@@ -68,5 +68,29 @@ pub fn speck_128_128(c: &mut Criterion){
     );
 }
 
-criterion_group!(benches, speck_32_64, speck_64_128, speck_128_128);
+pub fn speck_128_256(c: &mut Criterion){
+    let k = Key::<u64, u128, [u64;4]>::new(
+        &[0x1f1e1d1c1b1a1918u64, 0x1716151413121110u64, 0x0f0e0d0c0b0a0908u64, 0x0706050403020100u64]
+    );
+
+    c.bench_function(
+        "Speck 128/256 encryption",
+        |b| b.iter_batched(
+            || random::<u128>(),
+            |data| k.encrypt(data),
+            BatchSize::SmallInput
+        )
+    );
+
+    c.bench_function(
+        "Speck 128/256 decryption",
+        |b| b.iter_batched(
+            || k.encrypt(random::<u128>()),
+            |data| k.decrypt(data),
+            BatchSize::SmallInput
+        )
+    );
+}
+
+criterion_group!(benches, speck_32_64, speck_64_128, speck_128_128, speck_128_256);
 criterion_main!(benches);
