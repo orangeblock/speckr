@@ -39,7 +39,7 @@ macro_rules! round_dec {
 
 /// Performs key scheduling storing the round keys in the struct.
 ///
-/// The key is split into an array of words where the 0-th
+/// The key is split into an array of words (parts) where the 0-th
 /// index is the first word in memory (rightmost word below).
 /// For illustration purposes the following mental image is assumed:
 ///
@@ -53,28 +53,21 @@ macro_rules! round_dec {
 ///
 /// See also [sec. 4.2]: https://eprint.iacr.org/2013/404.pdf
 macro_rules! gen_round_keys {
-    ($key:expr, $composite:expr, $wt:ty) => {
+    ($key:expr, $parts:expr, $wt:ty) => {
         {
-            let mut parts: Vec<$wt> = vec![];
-            for i in 0..($key.key_size / $key.word_size){
-                parts.push(($composite >> (i * $key.word_size)) as $wt);
-            }
-            // set first round key to k0
-            $key.round_keys[0] = parts[0];
-            let plen = parts.len();
+            $key.round_keys[0] = $parts[0];
+            let plen = $parts.len();
             for i in 0..($key.rounds-1){
                 // calculate next key schedule using round number as key
-                let (e1, e0) = round_enc!(
-                    parts[1], parts[0], i as $wt
-                );
+                let (e1, e0) = round_enc!($parts[1], $parts[0], i as $wt);
                 // update key parts
-                parts[0] = e0;
+                $parts[0] = e0;
                 for j in 1..(plen-1){
-                    parts[j] = parts[j+1];
+                    $parts[j] = $parts[j+1];
                 }
-                parts[plen-1] = e1;
+                $parts[plen-1] = e1;
                 // set current round key
-                $key.round_keys[i+1] = parts[0];
+                $key.round_keys[i+1] = $parts[0];
             }
         }
     };
@@ -109,77 +102,6 @@ macro_rules! decrypt {
     };
 }
 
-/// Speck 32/64
-impl Key<u16, u32, u64> {
-    /// We reimplement all the operations defined by the macros for this specific
-    /// iteration since it uses differnet alpha/beta values. Hardcoding those values
-    /// in the macros leads to a significant enough speedup to warrant this duplication.
-    const ROUNDS: usize = 22;
-
-    pub fn new(key: u64) -> Key<u16, u32, u64>{
-        let mut k: Key<u16, u32, u64> = Key {
-            _marker_b: PhantomData,
-            _marker_k: PhantomData,
-            rounds: Self::ROUNDS,
-            round_keys: vec!(0u16; Self::ROUNDS),
-            word_size: 16,
-            key_size: 64
-        };
-        let mut parts: Vec<u16> = vec![];
-        for i in 0..(k.key_size / k.word_size){
-            parts.push((key >> (i * k.word_size)) as u16);
-        }
-        k.round_keys[0] = parts[0];
-        let plen = parts.len();
-        for i in 0..(k.rounds-1){
-            let (e1, e0) = Self::round_enc(parts[1], parts[0], i as u16);
-            parts[0] = e0;
-            for j in 1..(plen-1){
-                parts[j] = parts[j+1];
-            }
-            parts[plen-1] = e1;
-            k.round_keys[i+1] = parts[0];
-        }
-        k
-    }
-
-    fn round_enc(x: u16, y: u16, k: u16) -> (u16, u16){
-        let mut x = x.rotate_right(7);
-        x = x.wrapping_add(y);
-        x ^= k;
-        let mut y = y.rotate_left(2);
-        y ^= x;
-        (x, y)
-    }
-
-    fn round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
-        let mut y = y ^ x;
-        y = y.rotate_right(2);
-        let mut x = x ^ k;
-        x = x.wrapping_sub(y);
-        x = x.rotate_left(7);
-        (x, y)
-    }
-
-    pub fn encrypt(&self, block: u32) -> u32 {
-        let (mut b1, mut b0) = ((block >> self.word_size) as u16, block as u16);
-        for i in 0..self.rounds{
-            let (l, r) = Self::round_enc(b1, b0, self.round_keys[i]);
-            b1 = l; b0 = r;
-        }
-        ((b1 as u32) << self.word_size) | b0 as u32
-    }
-
-    pub fn decrypt(&self, block: u32) -> u32 {
-        let (mut b1, mut b0) = ((block >> self.word_size) as u16, block as u16);
-        for i in (0..self.rounds).rev(){
-            let (l, r) = Self::round_dec(b1, b0, self.round_keys[i]);
-            b1 = l; b0 = r;
-        }
-        ((b1 as u32) << self.word_size) | b0 as u32
-    }
-}
-
 /// Speck 64/128
 impl Key<u32, u64, u128> {
     const ROUNDS: usize = 27;
@@ -193,7 +115,11 @@ impl Key<u32, u64, u128> {
             word_size: 32,
             key_size: 128
         };
-        gen_round_keys!(&mut k, key, u32);
+        let mut parts: Vec<u32> = vec![];
+        for i in 0..(k.key_size / k.word_size){
+            parts.push((key >> (i * k.word_size)) as u32);
+        }
+        gen_round_keys!(k, parts, u32);
         k
     }
 
@@ -219,12 +145,44 @@ impl Key<u64, u128, u128> {
             word_size: 64,
             key_size: 128
         };
-        gen_round_keys!(&mut k, key, u64);
+        let mut parts: Vec<u64> = vec![];
+        for i in 0..(k.key_size / k.word_size){
+            parts.push((key >> (i * k.word_size)) as u64);
+        }
+        gen_round_keys!(k, parts, u64);
         k
     }
 
     pub fn encrypt(&self, block: u128) -> u128 {
-        encrypt!(&self, block, u64, u128)
+        encrypt!(self, block, u64, u128)
+    }
+
+    pub fn decrypt(&self, block: u128) -> u128 {
+        decrypt!(self, block, u64, u128)
+    }
+}
+
+/// Speck 128/192
+impl Key<u64, u128, [u64;3]>{
+    const ROUNDS: usize = 33;
+
+    pub fn new(key: &[u64; 3]) -> Key<u64, u128, [u64; 3]>{
+        let mut k: Key<u64, u128, [u64; 3]> = Key {
+            _marker_b: PhantomData,
+            _marker_k: PhantomData,
+            rounds: Self::ROUNDS,
+            round_keys: vec!(0u64; Self::ROUNDS),
+            word_size: 64,
+            key_size: 192
+        };
+        let mut parts: Vec<u64> = key.to_vec();
+        parts.reverse();
+        gen_round_keys!(k, parts, u64);
+        k
+    }
+
+    pub fn encrypt(&self, block: u128) -> u128 {
+        encrypt!(self, block, u64, u128)
     }
 
     pub fn decrypt(&self, block: u128) -> u128 {
@@ -247,18 +205,7 @@ impl Key<u64, u128, [u64;4]> {
         };
         let mut parts: Vec<u64> = key.to_vec();
         parts.reverse();
-
-        k.round_keys[0] = parts[0];
-        let plen = parts.len();
-        for i in 0..(k.rounds-1){
-            let (e1, e0) = round_enc!(parts[1], parts[0], i as u64);
-            parts[0] = e0;
-            for j in 1..(plen-1){
-                parts[j] = parts[j+1];
-            }
-            parts[plen-1] = e1;
-            k.round_keys[i+1] = parts[0];
-        }
+        gen_round_keys!(k, parts, u64);
         k
     }
 
@@ -274,26 +221,6 @@ impl Key<u64, u128, [u64;4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::random;
-
-    #[test]
-    fn test_correct_32_64(){
-        let pt = 0x6574694cu32;
-        let k = Key::<u16,u32,u64>::new(0x1918111009080100u64);
-        let ct = k.encrypt(pt);
-        assert_eq!(ct, 0xa86842f2);
-        let pt2 = k.decrypt(ct);
-        assert_eq!(pt2, pt);
-    }
-
-    #[test]
-    fn test_random_32_64(){
-        let k = Key::<u16,u32,u64>::new(random::<u64>());
-        for _ in 0..50{
-            let pt = random::<u32>();
-            assert_eq!(pt, k.decrypt(k.encrypt(pt)));
-        }
-    }
 
     #[test]
     fn test_correct_64_128(){
@@ -327,6 +254,27 @@ mod tests {
     #[test]
     fn test_random_128_128(){
         let k = Key::<u64, u128, u128>::new(rand::random::<u128>());
+        for _ in 0..50{
+            let pt = rand::random::<u128>();
+            assert_eq!(pt, k.decrypt(k.encrypt(pt)));
+        }
+    }
+
+    #[test]
+    fn test_correct_128_192(){
+        let pt = 0x726148206665696843206f7420746e65u128;
+        let k = Key::<u64, u128, [u64;3]>::new(
+            &[0x1716151413121110u64, 0x0f0e0d0c0b0a0908u64, 0x0706050403020100u64]);
+        let ct = k.encrypt(pt);
+        assert_eq!(ct, 0x1be4cf3a13135566f9bc185de03c1886u128);
+        let pt2 = k.decrypt(ct);
+        assert_eq!(pt2, pt);
+    }
+
+    #[test]
+    fn test_random_128_192(){
+        let k = Key::<u64, u128, [u64;3]>::new(
+            &[0x1716151413121110u64, 0x0f0e0d0c0b0a0908u64, 0x0706050403020100u64]);
         for _ in 0..50{
             let pt = rand::random::<u128>();
             assert_eq!(pt, k.decrypt(k.encrypt(pt)));
