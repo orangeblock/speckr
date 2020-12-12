@@ -1,5 +1,3 @@
-use num::PrimInt;
-use num::traits::{WrappingAdd, WrappingSub, AsPrimitive};
 use std::marker::PhantomData;
 
 pub struct Key<W, B, K>{
@@ -9,63 +7,34 @@ pub struct Key<W, B, K>{
     rounds: usize,
     word_size: usize,
     key_size: usize,
-    alpha: usize,
-    beta: usize
-}
-
-// Custom bit rotations which are *not* correct for the general case
-// but should be slightly faster than rotate_left/rotate_right here.
-#[inline]
-fn _ror<W>(x: W, n: usize, wsize: usize) -> W
-where W: PrimInt
-{
-    x >> n | x << (wsize - n)
-}
-#[inline]
-fn _ror2<W>(x: W, n: usize) -> W
-where W: PrimInt
-{
-    x >> n | x << ((std::mem::size_of::<W>()*8) - n)
-}
-#[inline]
-fn _rol<W>(x: W, n: usize, wsize: usize) -> W
-where W: PrimInt
-{
-    x << n | x >> (wsize - n)
-}
-#[inline]
-fn _rol2<W>(x: W, n: usize) -> W
-where W: PrimInt
-{
-    x << n | x >> ((std::mem::size_of::<W>()*8) - n)
 }
 
 /// The Speck round function used for encryption as well as key expansion.
-fn round_enc<W, B, K>(key: &Key<W,B,K>, x: W, y: W, k: W) -> (W, W)
-where W: PrimInt + WrappingAdd
-{
-    // let mut x = _ror(x, key.alpha, key.word_size);
-    let mut x = _ror2(x, key.alpha);
-    x = x.wrapping_add(&y);
-    x = x ^ k;
-    // let mut y = _rol(y, key.beta, key.word_size);
-    let mut y = _rol2(y, key.beta);
-    y = y ^ x;
-    (x, y)
+macro_rules! round_enc {
+    ($x:expr, $y:expr, $k:expr) => {
+        {
+            let mut x = $x.rotate_right(8);
+            x = x.wrapping_add($y);
+            x ^= $k;
+            let mut y = $y.rotate_left(3);
+            y ^= x;
+            (x, y)
+        }
+    };
 }
 
 /// Inverse operations of the round function used for decryption.
-fn round_dec<W,B,K>(key: &Key<W,B,K>, x: W, y: W, k: W) -> (W, W)
-where W: PrimInt + WrappingSub
-{
-    let mut y = y ^ x;
-    // y = _ror(y, key.beta, key.word_size);
-    y = _ror2(y, key.beta);
-    let mut x = x ^ k;
-    x = x.wrapping_sub(&y);
-    // x = _rol(x, key.alpha, key.word_size);
-    x = _rol2(x, key.alpha);
-    (x, y)
+macro_rules! round_dec {
+    ($x:expr, $y:expr, $k:expr) => {
+        {
+            let mut y = $y ^ $x;
+            y = y.rotate_right(3);
+            let mut x = $x ^ $k;
+            x = x.wrapping_sub(y);
+            x = x.rotate_left(8);
+            (x, y)
+        }
+    };
 }
 
 /// Performs key scheduling storing the round keys in the struct.
@@ -83,73 +52,68 @@ where W: PrimInt + WrappingSub
 ///   idx=3  idx=2  idx=1  idx=0
 ///
 /// See also [sec. 4.2]: https://eprint.iacr.org/2013/404.pdf
-fn gen_round_keys<W, B, K>(key: &mut Key<W,B,K>, composite: K)
-where
-    W: PrimInt + WrappingAdd + WrappingSub + AsPrimitive<B>,
-    B: PrimInt + AsPrimitive<W>,
-    K: PrimInt + AsPrimitive<W>
-{
-    let mut parts: Vec<W> = vec![];
-    for i in 0..(key.key_size / key.word_size){
-        parts.push((composite >> (i * key.word_size)).as_());
-    }
-    // set first round key to k0
-    // let mut ret = SpeckKey { round_keys: vec!(parts[0]; key.rounds) };
-    key.round_keys[0] = parts[0];
-    let plen = parts.len();
-    for i in 0..(key.rounds-1){
-        // calculate next key schedule using round number as key
-        let (e1, e0) = round_enc(
-            &key, parts[1], parts[0], num::NumCast::from(i).unwrap()
-        );
-        // update key parts
-        parts[0] = e0;
-        for j in 1..(plen-1){
-            parts[j] = parts[j+1];
+macro_rules! gen_round_keys {
+    ($key:expr, $composite:expr, $wt:ty) => {
+        {
+            let mut parts: Vec<$wt> = vec![];
+            for i in 0..($key.key_size / $key.word_size){
+                parts.push(($composite >> (i * $key.word_size)) as $wt);
+            }
+            // set first round key to k0
+            $key.round_keys[0] = parts[0];
+            let plen = parts.len();
+            for i in 0..($key.rounds-1){
+                // calculate next key schedule using round number as key
+                let (e1, e0) = round_enc!(
+                    parts[1], parts[0], i as $wt
+                );
+                // update key parts
+                parts[0] = e0;
+                for j in 1..(plen-1){
+                    parts[j] = parts[j+1];
+                }
+                parts[plen-1] = e1;
+                // set current round key
+                $key.round_keys[i+1] = parts[0];
+            }
         }
-        parts[plen-1] = e1;
-        // set current round key
-        key.round_keys[i+1] = parts[0];
-    }
+    };
 }
 
 /// Performs block encryption by successively applying the round
 /// function using the generated round keys.
-fn encrypt<W,B,K>(k: &Key<W,B,K>, block: B) -> B
-where
-    W: PrimInt + WrappingAdd + WrappingSub + AsPrimitive<B>,
-    B: PrimInt + AsPrimitive<W>,
-    K: PrimInt + AsPrimitive<W>
-{
-    let (mut b1, mut b0) = ((block >> k.word_size).as_(), block.as_());
-    for i in 0..k.rounds{
-        let (l, r) = round_enc(&k,
-            b1, b0, k.round_keys[i]
-        );
-        b1 = l; b0 = r;
-    }
-    ((b1.as_()) << k.word_size) | b0.as_()
+macro_rules! encrypt {
+    ($k:expr, $b:expr, $st:ty, $bt:ty) => {
+        {
+            let (mut b1, mut b0) = (($b >> $k.word_size) as $st, $b as $st);
+            for i in 0..$k.rounds{
+                let (l, r) = round_enc!(b1, b0, $k.round_keys[i]);
+                b1 = l; b0 = r;
+            }
+            ((b1 as $bt) << $k.word_size) | b0 as $bt
+        }
+    };
 }
 
 /// Performs block decryption by reversing the encryption operations.
-fn decrypt<W,B,K>(k: &Key<W,B,K>, block: B) -> B
-where
-    W: PrimInt + WrappingAdd + WrappingSub + AsPrimitive<B>,
-    B: PrimInt + AsPrimitive<W>,
-    K: PrimInt + AsPrimitive<W>
-{
-    let (mut b1, mut b0) = ((block >> k.word_size).as_(), block.as_());
-    for i in (0..k.rounds).rev(){
-        let (l, r) = round_dec(
-            &k, b1, b0, k.round_keys[i]
-        );
-        b1 = l; b0 = r;
-    }
-    ((b1.as_()) << k.word_size) | b0.as_()
+macro_rules! decrypt {
+    ($k:expr, $b:expr, $st:ty, $bt:ty) => {
+        {
+            let (mut b1, mut b0) = (($b >> $k.word_size) as $st, $b as $st);
+            for i in (0..$k.rounds).rev(){
+                let (l, r) = round_dec!(b1, b0, $k.round_keys[i]);
+                b1 = l; b0 = r;
+            }
+            ((b1 as $bt) << $k.word_size) | b0 as $bt
+        }
+    };
 }
 
 /// Speck 32/64
 impl Key<u16, u32, u64> {
+    /// We reimplement all the operations defined by the macros for this specific
+    /// iteration since it uses differnet alpha/beta values. Hardcoding those values
+    /// in the macros leads to a significant enough speedup to warrant this duplication.
     const ROUNDS: usize = 22;
 
     pub fn new(key: u64) -> Key<u16, u32, u64>{
@@ -159,67 +123,60 @@ impl Key<u16, u32, u64> {
             rounds: Self::ROUNDS,
             round_keys: vec!(0u16; Self::ROUNDS),
             word_size: 16,
-            key_size: 64,
-            alpha: 7,
-            beta: 2
+            key_size: 64
         };
-        gen_round_keys(&mut k, key);
+        let mut parts: Vec<u16> = vec![];
+        for i in 0..(k.key_size / k.word_size){
+            parts.push((key >> (i * k.word_size)) as u16);
+        }
+        k.round_keys[0] = parts[0];
+        let plen = parts.len();
+        for i in 0..(k.rounds-1){
+            let (e1, e0) = Self::round_enc(parts[1], parts[0], i as u16);
+            parts[0] = e0;
+            for j in 1..(plen-1){
+                parts[j] = parts[j+1];
+            }
+            parts[plen-1] = e1;
+            k.round_keys[i+1] = parts[0];
+        }
         k
     }
 
-    #[inline]
-    fn _ror(x: u16, n: usize) -> u16 { x >> n | x << (16 - n) }
-    #[inline]
-    fn _rol(x: u16, n: usize) -> u16 { x << n | x >> (16 - n) }
-
-    fn round_enc(&self, x: u16, y: u16, k: u16) -> (u16, u16)
-    {
-        // let mut x = Self::_ror(x, self.alpha);
-        // let mut x = _ror(x, self.alpha, self.word_size);
-        let mut x = _ror2(x, self.alpha);
+    fn round_enc(x: u16, y: u16, k: u16) -> (u16, u16){
+        let mut x = x.rotate_right(7);
         x = x.wrapping_add(y);
-        x = x ^ k;
-        // let mut y = Self::_rol(y, self.beta);
-        // let mut y = _rol(y, self.beta, self.word_size);
-        let mut y = _rol2(y, self.beta);
-        y = y ^ x;
+        x ^= k;
+        let mut y = y.rotate_left(2);
+        y ^= x;
         (x, y)
     }
 
-    fn round_dec(&self, x: u16, y: u16, k: u16) -> (u16, u16)
-    {
+    fn round_dec(x: u16, y: u16, k: u16) -> (u16, u16) {
         let mut y = y ^ x;
-        // y = Self::_ror(y, self.beta);
-        // y = _ror(y, self.beta, self.word_size);
-        y = _ror2(y, self.beta);
+        y = y.rotate_right(2);
         let mut x = x ^ k;
         x = x.wrapping_sub(y);
-        // x = Self::_rol(x, self.alpha);
-        // x = _rol(x, self.alpha, self.word_size);
-        x = _rol2(x, self.alpha);
+        x = x.rotate_left(7);
         (x, y)
     }
 
     pub fn encrypt(&self, block: u32) -> u32 {
-        let (mut b1, mut b0) = ((block >> 16) as u16, block as u16);
-        for i in 0..Self::ROUNDS{
-            let (l, r) = self.round_enc(
-                b1, b0, self.round_keys[i]
-            );
+        let (mut b1, mut b0) = ((block >> self.word_size) as u16, block as u16);
+        for i in 0..self.rounds{
+            let (l, r) = Self::round_enc(b1, b0, self.round_keys[i]);
             b1 = l; b0 = r;
         }
-        ((b1 as u32) << 16) | b0 as u32
+        ((b1 as u32) << self.word_size) | b0 as u32
     }
 
     pub fn decrypt(&self, block: u32) -> u32 {
-        let (mut b1, mut b0) = ((block >> 16) as u16, block as u16);
-        for i in (0..Self::ROUNDS).rev(){
-            let (l, r) = self.round_dec(
-                b1, b0, self.round_keys[i]
-            );
+        let (mut b1, mut b0) = ((block >> self.word_size) as u16, block as u16);
+        for i in (0..self.rounds).rev(){
+            let (l, r) = Self::round_dec(b1, b0, self.round_keys[i]);
             b1 = l; b0 = r;
         }
-        ((b1 as u32) << 16) | b0 as u32
+        ((b1 as u32) << self.word_size) | b0 as u32
     }
 }
 
@@ -234,20 +191,18 @@ impl Key<u32, u64, u128> {
             rounds: Self::ROUNDS,
             round_keys: vec!(0u32; Self::ROUNDS),
             word_size: 32,
-            key_size: 128,
-            alpha: 8,
-            beta: 3
+            key_size: 128
         };
-        gen_round_keys(&mut k, key);
+        gen_round_keys!(&mut k, key, u32);
         k
     }
 
     pub fn encrypt(&self, block: u64) -> u64 {
-        encrypt(&self, block)
+        encrypt!(&self, block, u32, u64)
     }
 
     pub fn decrypt(&self, block: u64) -> u64 {
-        decrypt(&self, block)
+        decrypt!(&self, block, u32, u64)
     }
 }
 
@@ -262,20 +217,18 @@ impl Key<u64, u128, u128> {
             rounds: Self::ROUNDS,
             round_keys: vec!(0u64; Self::ROUNDS),
             word_size: 64,
-            key_size: 128,
-            alpha: 8,
-            beta: 3
+            key_size: 128
         };
-        gen_round_keys(&mut k, key);
+        gen_round_keys!(&mut k, key, u64);
         k
     }
 
     pub fn encrypt(&self, block: u128) -> u128 {
-        encrypt(self, block)
+        encrypt!(&self, block, u64, u128)
     }
 
     pub fn decrypt(&self, block: u128) -> u128 {
-        decrypt(self, block)
+        decrypt!(self, block, u64, u128)
     }
 }
 
@@ -290,9 +243,7 @@ impl Key<u64, u128, [u64;4]> {
             rounds: Self::ROUNDS,
             round_keys: vec!(0u64; Self::ROUNDS),
             word_size: 64,
-            key_size: 256,
-            alpha: 8,
-            beta: 3
+            key_size: 256
         };
         let mut parts: Vec<u64> = key.to_vec();
         parts.reverse();
@@ -300,65 +251,23 @@ impl Key<u64, u128, [u64;4]> {
         k.round_keys[0] = parts[0];
         let plen = parts.len();
         for i in 0..(k.rounds-1){
-            // calculate next key schedule using round number as key
-            let (e1, e0) = round_enc(
-                &k, parts[1], parts[0], num::NumCast::from(i).unwrap()
-            );
-            // update key parts
+            let (e1, e0) = round_enc!(parts[1], parts[0], i as u64);
             parts[0] = e0;
             for j in 1..(plen-1){
                 parts[j] = parts[j+1];
             }
             parts[plen-1] = e1;
-            // set current round key
             k.round_keys[i+1] = parts[0];
         }
         k
     }
 
-    #[inline]
-    fn _ror(x: u64, n: usize) -> u64 { x >> n | x << (64 - n) }
-    #[inline]
-    fn _rol(x: u64, n: usize) -> u64 { x << n | x >> (64 - n) }
-
-    fn round_enc(&self, x: u64, y: u64, k: u64) -> (u64, u64){
-        let mut x = Self::_ror(x, self.alpha);
-        x = x.wrapping_add(y);
-        x = x ^ k;
-        let mut y = Self::_rol(y, self.beta);
-        y = y ^ x;
-        (x, y)
-    }
-
-    fn round_dec(&self, x: u64, y: u64, k: u64) -> (u64, u64){
-        let mut y = y ^ x;
-        y = Self::_ror(y, self.beta);
-        let mut x = x ^ k;
-        x = x.wrapping_sub(y);
-        x = Self::_rol(x, self.alpha);
-        (x, y)
-    }
-
     pub fn encrypt(&self, block: u128) -> u128 {
-        let (mut b1, mut b0) = ((block >> 64) as u64, block as u64);
-        for i in 0..Self::ROUNDS{
-            let (l, r) = self.round_enc(
-                b1, b0, self.round_keys[i]
-            );
-            b1 = l; b0 = r;
-        }
-        ((b1 as u128) << 64) | b0 as u128
+        encrypt!(self, block, u64, u128)
     }
 
     pub fn decrypt(&self, block: u128) -> u128 {
-        let (mut b1, mut b0) = ((block >> 64) as u64, block as u64);
-        for i in (0..Self::ROUNDS).rev(){
-            let (l, r) = self.round_dec(
-                b1, b0, self.round_keys[i]
-            );
-            b1 = l; b0 = r;
-        }
-        ((b1 as u128) << 64) | b0 as u128
+        decrypt!(self, block, u64, u128)
     }
 }
 
