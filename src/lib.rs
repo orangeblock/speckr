@@ -1,12 +1,16 @@
 use std::marker::PhantomData;
 
-pub struct Key<W, B, K>{
-    _marker_b: PhantomData<B>,
+pub type Speck6496 = Key<u32, [u32;3]>;
+pub type Speck64128 = Key<u32, u128>;
+pub type Speck128128 = Key<u64, u128>;
+pub type Speck128192 = Key<u64, [u64;3]>;
+pub type Speck128256 = Key<u64, [u64;4]>;
+
+pub struct Key<W, K>{
     _marker_k: PhantomData<K>,
     round_keys: Vec<W>,
     rounds: usize,
-    word_size: usize,
-    key_size: usize,
+    word_size: usize
 }
 
 /// The Speck round function used for encryption as well as key expansion.
@@ -102,51 +106,72 @@ macro_rules! decrypt {
     };
 }
 
-/// Speck 64/128
-impl Key<u32, u64, u128> {
-    const ROUNDS: usize = 27;
+/// Speck 64/96
+impl Key<u32, [u32;3]> {
+    const ROUNDS: usize = 26;
 
-    pub fn new(key: u128) -> Key<u32, u64, u128>{
-        let mut k: Key<u32, u64, u128> = Key {
-            _marker_b: PhantomData,
+    pub fn new(key: &[u32;3]) -> Key<u32, [u32;3]>{
+        let mut k: Key<u32, [u32;3]> = Key {
             _marker_k: PhantomData,
             rounds: Self::ROUNDS,
             round_keys: vec!(0u32; Self::ROUNDS),
-            word_size: 32,
-            key_size: 128
+            word_size: 32
         };
-        let mut parts: Vec<u32> = vec![];
-        for i in 0..(k.key_size / k.word_size){
-            parts.push((key >> (i * k.word_size)) as u32);
-        }
+        let mut parts: Vec<u32> = key.to_vec();
+        parts.reverse();
         gen_round_keys!(k, parts, u32);
         k
     }
 
     pub fn encrypt(&self, block: u64) -> u64 {
-        encrypt!(&self, block, u32, u64)
+        encrypt!(self, block, u32, u64)
     }
 
     pub fn decrypt(&self, block: u64) -> u64 {
-        decrypt!(&self, block, u32, u64)
+        decrypt!(self, block, u32, u64)
+    }
+}
+
+/// Speck 64/128
+impl Key<u32, u128> {
+    const ROUNDS: usize = 27;
+
+    pub fn new(key: u128) -> Key<u32, u128>{
+        let mut k: Key<u32, u128> = Key {
+            _marker_k: PhantomData,
+            rounds: Self::ROUNDS,
+            round_keys: vec!(0u32; Self::ROUNDS),
+            word_size: 32
+        };
+        let mut parts: Vec<u32> = vec![];
+        for i in 0..4{
+            parts.push((key >> (i * k.word_size)) as u32);
+        }
+        gen_round_keys!(k, parts, u32);
+        k
+    }
+    pub fn encrypt(&self, block: u64) -> u64 {
+        encrypt!(self, block, u32, u64)
+    }
+
+    pub fn decrypt(&self, block: u64) -> u64 {
+        decrypt!(self, block, u32, u64)
     }
 }
 
 /// Speck 128/128
-impl Key<u64, u128, u128> {
+impl Key<u64, u128> {
     const ROUNDS: usize = 32;
 
-    pub fn new(key: u128) -> Key<u64, u128, u128>{
-        let mut k: Key<u64, u128, u128> = Key {
-            _marker_b: PhantomData,
+    pub fn new(key: u128) -> Key<u64, u128>{
+        let mut k: Key<u64, u128> = Key {
             _marker_k: PhantomData,
             rounds: Self::ROUNDS,
             round_keys: vec!(0u64; Self::ROUNDS),
-            word_size: 64,
-            key_size: 128
+            word_size: 64
         };
         let mut parts: Vec<u64> = vec![];
-        for i in 0..(k.key_size / k.word_size){
+        for i in 0..2{
             parts.push((key >> (i * k.word_size)) as u64);
         }
         gen_round_keys!(k, parts, u64);
@@ -163,17 +188,15 @@ impl Key<u64, u128, u128> {
 }
 
 /// Speck 128/192
-impl Key<u64, u128, [u64;3]>{
+impl Key<u64, [u64;3]>{
     const ROUNDS: usize = 33;
 
-    pub fn new(key: &[u64; 3]) -> Key<u64, u128, [u64; 3]>{
-        let mut k: Key<u64, u128, [u64; 3]> = Key {
-            _marker_b: PhantomData,
+    pub fn new(key: &[u64; 3]) -> Key<u64, [u64; 3]>{
+        let mut k: Key<u64, [u64; 3]> = Key {
             _marker_k: PhantomData,
             rounds: Self::ROUNDS,
             round_keys: vec!(0u64; Self::ROUNDS),
-            word_size: 64,
-            key_size: 192
+            word_size: 64
         };
         let mut parts: Vec<u64> = key.to_vec();
         parts.reverse();
@@ -191,17 +214,15 @@ impl Key<u64, u128, [u64;3]>{
 }
 
 /// Speck 128/256
-impl Key<u64, u128, [u64;4]> {
+impl Key<u64, [u64;4]> {
     const ROUNDS: usize = 34;
 
-    pub fn new(key: &[u64; 4]) -> Key<u64, u128, [u64; 4]>{
-        let mut k: Key<u64, u128, [u64; 4]> = Key {
-            _marker_b: PhantomData,
+    pub fn new(key: &[u64; 4]) -> Key<u64, [u64; 4]>{
+        let mut k: Key<u64, [u64; 4]> = Key {
             _marker_k: PhantomData,
             rounds: Self::ROUNDS,
             round_keys: vec!(0u64; Self::ROUNDS),
-            word_size: 64,
-            key_size: 256
+            word_size: 64
         };
         let mut parts: Vec<u64> = key.to_vec();
         parts.reverse();
@@ -223,9 +244,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_correct_64_96(){
+        let pt = 0x74614620736e6165u64;
+        let k = Speck6496::new(
+            &[0x13121110u32, 0x0b0a0908u32, 0x03020100u32]);
+        let ct = k.encrypt(pt);
+        assert_eq!(ct, 0x9f7952ec4175946cu64);
+        let pt2 = k.decrypt(ct);
+        assert_eq!(pt2, pt);
+    }
+
+    #[test]
+    fn test_random_64_96(){
+        let k = Speck6496::new(
+            &[0x13121110u32, 0x0b0a0908u32, 0x03020100u32]);
+        for _ in 0..50{
+            let pt = rand::random::<u64>();
+            assert_eq!(pt, k.decrypt(k.encrypt(pt)));
+        }
+    }
+
+    #[test]
     fn test_correct_64_128(){
         let pt = 0x3b7265747475432du64;
-        let k = Key::<u32, u64, u128>::new(0x1b1a1918131211100b0a090803020100u128);
+        let k = Speck64128::new(0x1b1a1918131211100b0a090803020100u128);
         let ct = k.encrypt(pt);
         assert_eq!(ct, 0x8c6fa548454e028b);
         let pt2 = k.decrypt(ct);
@@ -234,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_random_64_128(){
-        let k = Key::<u32, u64, u128>::new(rand::random::<u128>());
+        let k = Speck64128::new(rand::random::<u128>());
         for _ in 0..50{
             let pt = rand::random::<u64>();
             assert_eq!(pt, k.decrypt(k.encrypt(pt)));
@@ -244,7 +286,7 @@ mod tests {
     #[test]
     fn test_correct_128_128(){
         let pt = 0x6c617669757165207469206564616d20u128;
-        let k = Key::<u64, u128, u128>::new(0x0f0e0d0c0b0a09080706050403020100u128);
+        let k = Speck128128::new(0x0f0e0d0c0b0a09080706050403020100u128);
         let ct = k.encrypt(pt);
         assert_eq!(ct, 0xa65d9851797832657860fedf5c570d18);
         let pt2 = k.decrypt(ct);
@@ -253,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_random_128_128(){
-        let k = Key::<u64, u128, u128>::new(rand::random::<u128>());
+        let k = Speck128128::new(rand::random::<u128>());
         for _ in 0..50{
             let pt = rand::random::<u128>();
             assert_eq!(pt, k.decrypt(k.encrypt(pt)));
@@ -263,7 +305,7 @@ mod tests {
     #[test]
     fn test_correct_128_192(){
         let pt = 0x726148206665696843206f7420746e65u128;
-        let k = Key::<u64, u128, [u64;3]>::new(
+        let k = Speck128192::new(
             &[0x1716151413121110u64, 0x0f0e0d0c0b0a0908u64, 0x0706050403020100u64]);
         let ct = k.encrypt(pt);
         assert_eq!(ct, 0x1be4cf3a13135566f9bc185de03c1886u128);
@@ -273,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_random_128_192(){
-        let k = Key::<u64, u128, [u64;3]>::new(
+        let k = Speck128192::new(
             &[0x1716151413121110u64, 0x0f0e0d0c0b0a0908u64, 0x0706050403020100u64]);
         for _ in 0..50{
             let pt = rand::random::<u128>();
@@ -284,7 +326,7 @@ mod tests {
     #[test]
     fn test_correct_128_256(){
         let pt = 0x65736f6874206e49202e72656e6f6f70u128;
-        let k = Key::<u64, u128, [u64;4]>::new(
+        let k = Speck128256::new(
             &[0x1f1e1d1c1b1a1918u64, 0x1716151413121110u64, 0x0f0e0d0c0b0a0908u64, 0x0706050403020100u64]
         );
         let ct = k.encrypt(pt);
@@ -295,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_random_128_256(){
-        let k = Key::<u64, u128, [u64;4]>::new(
+        let k = Speck128256::new(
             &[rand::random::<u64>(), rand::random::<u64>(), rand::random::<u64>(), rand::random::<u64>()]
         );
         for _ in 0..50{
