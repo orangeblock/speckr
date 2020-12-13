@@ -10,7 +10,7 @@ The module exposes the `Speck<block-size><key-size>` types for easy access, so f
 ```rust
 let pt = 0x6c617669757165207469206564616d20u128;
 // Create the Speck key instance
-let k = Speck128128::new(0x0f0e0d0c0b0a09080706050403020100u128);
+let k = speckr::Speck128128::new(0x0f0e0d0c0b0a09080706050403020100u128);
 // Get the encrypted block
 let ct = k.encrypt(pt);
 // Get back the original plaintext
@@ -21,7 +21,7 @@ Using the 128/256, 128/192 and 64/96 variants requires you to pass the key as a 
 ```rust
 let pt = 0x74614620736e6165u64;
 // Block size is u64 so we pass 3 u32 parts to build the u96 key.
-let k = Speck6496::new(&[0x13121110u32, 0x0b0a0908u32, 0x03020100u32];
+let k = speckr::Speck6496::new(&[0x13121110u32, 0x0b0a0908u32, 0x03020100u32];
 // Operations are same as before
 let ct = k.encrypt(pt);
 let pt2 = k.decrypt(ct);
